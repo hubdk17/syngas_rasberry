@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# Reactor Dashboard -- runtime dependencies
+#
+# Target interpreter: Python 3.11
+#
+# The version is pinned to the deployment target, not to the newest release.
+# Raspberry Pi OS Bookworm ships Python 3.11, so the development environment
+# matches the Pi exactly. Developing on a newer interpreter and deploying to
+# 3.11 invites the class of bug that only appears on the hardware.
+#
+# Versions are pinned exactly. An industrial HMI that silently changes
+# behaviour because a transitive dependency published a new release is not an
+# industrial HMI. Bumps are deliberate, reviewed and tested.
+# ---------------------------------------------------------------------------
+
+# GUI toolkit.
+#
+# Requires 64-bit Raspberry Pi OS. Qt publishes manylinux aarch64 wheels but
+# no armv7l wheels, so a 32-bit Pi OS image cannot pip-install PySide6 and
+# would need a source build. Verify `uname -m` reports aarch64 before setup.
+PySide6==6.11.1
+
+# Real-time plotting. Chosen over matplotlib because it redraws fast enough
+# for live trends on a Pi Zero 2 W; matplotlib is built for publication
+# figures, not for a 5 Hz repaint loop on a 1 GHz quad-core.
+pyqtgraph==0.14.0
+
+# Array backing for the telemetry ring buffer and the plot views. pyqtgraph
+# requires it regardless, so it is a direct dependency rather than incidental.
+numpy==2.4.6
+
+# UART transport. Not used until UARTSource lands (build step 10), but pinned
+# now so the simulation and hardware environments are byte-identical.
+pyserial==3.5

@@ -1,0 +1,10 @@
+# ---------------------------------------------------------------------------
+# Reactor Dashboard -- development dependencies
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# Kept separate from requirements.txt so the Raspberry Pi deployment does not
+# carry test tooling it will never run.
+# ---------------------------------------------------------------------------
+
+pytest==9.1.1

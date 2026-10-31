@@ -1,0 +1,363 @@
+# ===========================================================================
+# Reactor Dashboard -- application configuration
+#
+# This is the file an operator or commissioning engineer edits. Nothing here
+# requires a Python change to take effect.
+#
+# Every key in this file is read by code. Configuration that nothing consumes
+# is worse than no configuration at all: it tells the reader the system has a
+# setting it does not actually have. Keys are therefore added alongside the
+# module that reads them, never in advance.
+#
+# Unknown keys and unknown values are REJECTED at startup rather than ignored.
+# A typo that is silently discarded leaves an engineer believing they changed
+# something they did not -- which, on a reactor, is the wrong kind of surprise.
+# ===========================================================================
+
+[telemetry]
+
+# Where telemetry bytes come from.
+#
+#   "simulation"  Built-in reactor simulator. No hardware required. Produces
+#                 byte-identical protocol traffic to the real Arduino.
+#   "uart"        Live Arduino GIGA R1 over the serial link.
+#
+# THIS IS THE SWITCH. Changing this single value moves the whole application
+# between simulated and live telemetry. No other file changes -- not the
+# dashboard, not analytics, not storage.
+source = "simulation"
+
+
+[uart]
+
+# Serial device the Arduino is connected to. Only read when
+# telemetry.source = "uart".
+#
+#   Raspberry Pi   /dev/serial0   (the primary UART; usually correct)
+#                  /dev/ttyAMA0   (PL011, if serial0 is mapped elsewhere)
+#                  /dev/ttyUSB0   (a USB-to-serial adapter)
+#   Windows        COM3, COM4, ...
+#
+# Note there is deliberately no baud rate here. 115200 8N1 is fixed by the
+# firmware (PLC_BAUD, config/communication_config.h:23) and is part of the
+# protocol contract, not a deployment choice -- it lives in
+# backend/protocol/spec.py. Exposing it here would only create a way to set
+# it wrong.
+port = "/dev/serial0"
+
+
+# ===========================================================================
+# STORAGE
+#
+# TelemetryStore is the single owner of all received telemetry. The dashboard,
+# analytics and the logger all read through it; none keeps its own copy.
+# ===========================================================================
+
+[storage]
+
+# How far back the in-memory window reaches, in seconds of reactor time.
+#
+# Expressed as a duration rather than a frame count because that is the
+# question an engineer actually has -- "how far back can I scroll?" -- and the
+# frame count follows from the protocol's fixed 1 Hz cadence.
+#
+# One hour is 3600 records. A record is a small frozen object, so the whole
+# window costs on the order of a megabyte: comfortable on a 512 MB Pi Zero 2 W
+# and far cheaper than the Qt scene graph above it.
+history_seconds = 3600
+
+# Frames with no arrival before the link is declared dead and the banner
+# reads NO SIGNAL.
+#
+# Three at 1 Hz. Long enough that a single dropped packet does not flicker the
+# banner; short enough that an operator is never studying stale numbers in the
+# belief that they are live.
+stale_after_frames = 3
+
+
+# ===========================================================================
+# SIMULATION
+#
+# Read only when telemetry.source = "simulation".
+# ===========================================================================
+
+[simulation]
+
+# Seed for every random draw in the simulator. Remove this key for a
+# nondeterministic run.
+#
+# A seeded run is reproducible frame for frame: the same seed replays the same
+# reactor, the same upsets at the same moments, and the same noise. That is
+# what makes a UI bug reproducible and a screenshot comparison meaningful.
+# Endurance runs are usually better left unseeded.
+seed = 20260804
+
+# Frame cadence. Matches the firmware's TELEMETRY_PERIOD_MS (timing_config.h:63)
+# so the dashboard is developed against the rate it will actually receive.
+frame_period_ms = 1000
+
+# Who decides when an upset starts.
+#
+#   "random"  Upsets arrive on their own as a Poisson process. The default,
+#             and the mode for long endurance runs -- leave it going overnight
+#             and the HMI meets combinations nobody staged.
+#   "manual"  Nothing happens unless triggered. For development, demos and
+#             deterministic UI testing.
+#
+# Scenarios can be triggered by hand in either mode.
+scenario_mode = "random"
+
+# Mean idle time between randomly-fired upsets, and the minimum gap between
+# them. Inter-arrival times are exponential around the mean, so upsets cluster
+# and space out the way real disturbances do rather than arriving on a
+# metronome. The floor stops the distribution occasionally firing two upsets
+# back to back, which reads as a broken simulator.
+scenario_mean_interval_s = 240.0
+scenario_min_gap_s = 90.0
+
+
+# ---------------------------------------------------------------------------
+# Reactor operating envelope
+#
+# *** PROVISIONAL -- see docs/ARCHITECTURE.md open question 1 ***
+#
+# The real reactor has not been characterised. The firmware warns at 150 kPa
+# and declares emergency at 180 kPa, while a BMP280 reads ABSOLUTE pressure
+# (~101 kPa at atmosphere), so a near-atmospheric gasifier is assumed:
+# nominal ~105 kPa, with warnings genuinely rare in normal operation.
+#
+# These are configuration rather than constants precisely so that retuning
+# after commissioning is an edit here, not a code change.
+# ---------------------------------------------------------------------------
+
+[simulation.physics]
+
+# Pressure the reactor settles toward, and how hard it is pulled back.
+# Reversion is what makes this look like a controlled process rather than a
+# random walk; without it pressure drifts off scale within the hour.
+pressure_baseline_kpa = 105.0
+pressure_reversion_per_s = 0.06
+
+# Stochastic drift, in kPa per sqrt(second). Larger values give a visibly
+# noisier trend line.
+pressure_noise_kpa = 0.30
+
+# Nominal gas readings.
+#
+# Units are deliberately unstated: the firmware has not yet applied the
+# datasheet scaling factor, so these are raw Modbus counts on the same scale
+# the ppm thresholds are compared against (docs/PROTOCOL.md section 6.2).
+co_baseline = 420.0
+co2_baseline = 3200.0
+ch4_baseline = 1850.0
+
+gas_reversion_per_s = 0.08
+
+# Noise as a fraction of each species' own baseline, so all three are equally
+# noisy in relative terms despite differing by an order of magnitude.
+gas_noise_fraction = 0.010
+
+# How strongly gas production follows pressure. In a gasifier the two are
+# physically linked -- higher pressure means more conversion. At 0.0 the
+# signals wander independently and the dashboard's correlation displays would
+# be showing nothing but noise.
+gas_pressure_coupling = 0.8
+
+
+# ---------------------------------------------------------------------------
+# Synthetic anomaly model
+#
+# Stands in for the XGBoost score. The real forest is a hand-written
+# placeholder in firmware, so there is no meaningful model to reproduce; what
+# matters is that the score is quiet when the reactor behaves and rises when
+# it deviates.
+# ---------------------------------------------------------------------------
+
+[simulation.generator]
+
+# Score with the reactor running nominally, and how sharply it responds to
+# deviation.
+anomaly_baseline = 0.05
+anomaly_sensitivity = 0.55
+anomaly_noise = 0.02
+
+# How quickly the model's internal "normal" adapts. Lower is slower, so a
+# sustained excursion keeps scoring high for longer before being accepted as
+# the new normal.
+anomaly_reference_alpha = 0.02
+
+# Deviation that counts as fully anomalous, for pressure (kPa) and for gas
+# (as a fraction of the current gas reference).
+anomaly_pressure_scale_kpa = 12.0
+anomaly_gas_scale_fraction = 0.12
+
+# Let the score drive the anomaly FLAG, not just the score.
+#
+# false matches the firmware, which forces the flag off while the forest is a
+# placeholder (build_config.h:41, DecisionEngine.cpp:50-56). ReactorState
+# ANOMALY is therefore unreachable, exactly as on the real reactor.
+#
+# Set true only to exercise the ANOMALY banner and its colour treatment. Leave
+# it false for anything resembling validation: a simulator that produces
+# states the reactor cannot reach would let the HMI be tuned around a
+# condition that never arrives.
+emulate_anomaly_verdict = false
+
+
+# ---------------------------------------------------------------------------
+# Telemetry link faults
+#
+# Models the CABLE misbehaving, as opposed to the reactor misbehaving. These
+# validate the dashboard's communication handling -- CRC counters, resync,
+# NO SIGNAL, stale-value greying -- independently of reactor behaviour.
+#
+# Kept separate from the scenarios above so the two axes vary independently: a
+# perfectly behaved reactor on a terrible link, or a runaway reactor on a
+# flawless one.
+#
+# Probabilities are per frame. At 1 Hz, 0.01 is about one event per 100 s.
+# ---------------------------------------------------------------------------
+
+[simulation.link]
+
+# Whether to insert the fault injector at all. With this false the stream is
+# pristine, which is the right default: a developer building a gauge should
+# not be fighting injected CRC errors.
+#
+# Set true with all probabilities at 0.0 to get an injector that does nothing
+# except what you trigger by hand -- the mode for deterministic UI testing.
+enabled = false
+
+# Drop a whole frame. The dashboard should show a gap in the trend and a
+# frame-interval blip, not a stall.
+packet_loss_probability = 0.01
+
+# Flip a single bit. Usually lands in the payload and produces a CRC error;
+# occasionally lands in the header and produces a resync instead. Both are
+# real line faults and both should be survivable.
+corruption_probability = 0.01
+
+# Hold a frame back and release it late, out of step with the cadence.
+delay_probability = 0.005
+delay_seconds = 2.5
+
+# Go silent, as if the cable were pulled. The banner should reach NO SIGNAL
+# and the last values should grey out with an age stamp -- never stay green
+# and frozen.
+disconnect_probability = 0.002
+disconnect_duration_s = 20.0
+
+
+# ===========================================================================
+# SCENARIOS
+#
+# Reactor upsets, declared as data.
+#
+# Adding one is a new [[simulation.scenario]] table here -- no new class, no
+# subclass, no Python change. The simulator has no per-scenario logic to edit.
+#
+# Available fields (all optional except name and duration_s):
+#
+#   name                     Identifier, used to trigger it by hand.
+#   duration_s               How long it runs.
+#   weight                   Relative likelihood in random mode. 0 means
+#                            "never fires on its own, but stays available to
+#                            trigger" -- useful for a demo-only scenario.
+#   ramp_fraction            Portion of the duration spent easing in, and
+#                            again easing out. 0.25 = ramp/hold/ramp.
+#                            0.0 gives a step change.
+#   pressure_bias_kpa        Shifts the pressure the reactor settles toward.
+#                            A sustained excursion.
+#   pressure_impulse_kpa_s   Adds directly to dP/dt. A transient kick, which
+#                            trips the RATE limit without the absolute
+#                            pressure necessarily leaving its normal band.
+#   gas_multiplier           Scales gas production. 1.0 is nominal.
+#   stall_pressure_sensor    Pressure sensor stops updating.
+#   stall_gas_sensors        Gas sensors stop updating.
+#
+# Reference limits, for choosing values (safety_config.h):
+#   pressure warning 150 kPa, emergency 180 kPa, rate 5 kPa/s
+#   CO 1000, CO2 8000, CH4 5000, total gas 12000
+# ===========================================================================
+
+# A slow climb toward the warning limit and back. The commonest real upset,
+# and the one the trend graphs and trend arrows most need to render well.
+[[simulation.scenario]]
+name = "pressure_ramp"
+duration_s = 180.0
+weight = 3.0
+ramp_fraction = 0.35
+pressure_bias_kpa = 52.0
+
+# A sharp transient. Trips the rate-of-change warning while absolute pressure
+# stays well inside limits -- the case where a dashboard showing only absolute
+# values would report everything as normal.
+#
+# pressure_impulse_kpa_s follows a full sine cycle over the duration, so it
+# rises and recovers with no net displacement. Duration and magnitude together
+# set the excursion: the peak offset is roughly impulse * duration / pi, so
+# 8 kPa/s over 12 s peaks around 30 kPa above baseline -- comfortably inside
+# the 150 kPa limit while the rate exceeds 5 kPa/s.
+[[simulation.scenario]]
+name = "pressure_spike"
+duration_s = 12.0
+weight = 2.0
+pressure_impulse_kpa_s = 8.0
+
+# A pressure loss. Rate warnings trigger on magnitude, so a rapid fall is as
+# significant as a rapid rise (ThresholdInference.cpp:44-47).
+[[simulation.scenario]]
+name = "pressure_loss"
+duration_s = 90.0
+weight = 1.5
+ramp_fraction = 0.15
+pressure_bias_kpa = -45.0
+
+# Gas production surge. Pushes CO2 and total gas toward their limits.
+[[simulation.scenario]]
+name = "gas_excursion"
+duration_s = 150.0
+weight = 2.0
+gas_multiplier = 2.6
+
+# Feedstock starvation: output falls away and recovers.
+[[simulation.scenario]]
+name = "feed_starvation"
+duration_s = 200.0
+weight = 1.5
+gas_multiplier = 0.35
+
+# The dangerous one.
+#
+# The pressure sensor stops updating. The reactor carries on changing, but the
+# firmware forwards its last good reading and differentiates that frozen
+# value, so pressure_rate collapses to exactly zero
+# (docs/PROTOCOL.md section 6.4).
+#
+# The result looks like a perfectly stable reactor. Detecting it is the
+# analytics layer's job, and this scenario is how that gets tested.
+[[simulation.scenario]]
+name = "pressure_sensor_stall"
+duration_s = 120.0
+weight = 1.0
+ramp_fraction = 0.0
+stall_pressure_sensor = true
+
+# The same failure on the Modbus gas bus.
+[[simulation.scenario]]
+name = "gas_sensor_stall"
+duration_s = 120.0
+weight = 1.0
+ramp_fraction = 0.0
+stall_gas_sensors = true
+
+# Compound upset: pressure and gas both climbing. Weight 0 -- it never fires
+# on its own, but is available to trigger for demonstrating the emergency
+# banner on demand.
+[[simulation.scenario]]
+name = "runaway"
+duration_s = 240.0
+weight = 0.0
+ramp_fraction = 0.4
+pressure_bias_kpa = 95.0
+gas_multiplier = 3.2
